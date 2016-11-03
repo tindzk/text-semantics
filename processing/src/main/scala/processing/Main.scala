@@ -8,7 +8,7 @@ object Main extends App {
   val processedDir = Paths.get("../data/processed/")
   
   val enDev     = englishDir.resolve("en-ud-dev.conllu")
-  val enDevProc = processedDir.resolve("en-ud.dev.txt")
+  val enDevProc = processedDir.resolve("en-ud-keywords.txt")
 
   val allowedCharsSet = Set('.', ',', ' ')
 
@@ -18,24 +18,39 @@ object Main extends App {
   def converter(from: Path, to: Path): Stream[Task, Unit] =
     io.file.readAll[Task](from, 4096)
       .through(text.utf8Decode)
-      .through(text.lines)
-      .map { line =>
-        val elems = line.split("\\s")
-        if (elems.length < 2) None
-        else Some(elems(1).toLowerCase.filter(allowedChars))
-      }
-      .split(_.isEmpty)
-      .map { _
-        .map(_.get)
-        .foldLeft("") { case (accum, w) =>
-          if (w.length == 1 && w.forall(!_.isLetter)) accum + w else accum + " " + w
+      .map(_
+        .split("\n\n")
+        .map(_
+          .split("\n")
+          .map(_.split("\\s"))
+          .collect {
+            case elems if elems.length > 7 =>
+              val word = elems(1)
+              val tpe  = elems(3)  // NOUN
+              val tpe2 = elems(7)  // nsubj
+              (word, tpe, tpe2)
+          }
+          .foldLeft(("", List.empty[String])) { case ((sentence, keywords), (w, tpe, tpe2)) =>
+            val newSentence =
+              if (w.length == 1 && w.forall(!_.isLetter)) sentence + w
+              else sentence + " " + w
+
+            val newKeywords =
+              if (tpe == "NOUN" && tpe2 == "nsubj") keywords :+ w
+              else keywords
+
+            (newSentence, newKeywords)
+          }
+        )
+        .map { case (sentence, keywords) =>
+          sentence + "\t" + keywords.mkString("\t")
         }
+        .mkString("\n")
         .trim
-      }
-      .intersperse("\n")
+      )
+      .intersperse("")
       .through(text.utf8Encode)
       .through(io.file.writeAll(to))
 
-  // if (!Files.exists(enDevProc)) Files.createFile(enDevProc)
   converter(enDev, enDevProc).run.unsafeRun
 }
